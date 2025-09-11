@@ -5,6 +5,18 @@ class IntegrityMonitor {
         this.config = this.getConfig();
         this.manifestEndpoint = this.config.manifestEndpoint;
         this.reportEndpoint = this.config.reportEndpoint;
+
+        const script = document.currentScript || document.querySelector('script[data-tenant]');
+        // explicit base path set on script tag (preferred)
+        this.basePath = (script && script.dataset && script.dataset.basePath) || null;
+
+        // autodetect site repo base if not provided: e.g. /Integrity from page path
+        if (!this.basePath) {
+            const parts = window.location.pathname.split('/').filter(Boolean);
+            this.basePath = parts.length > 0 ? '/' + parts[0] : '';
+        }
+
+        this.origin = window.location.origin;
     }
 
     getConfig() {
@@ -101,19 +113,56 @@ class IntegrityMonitor {
         return btoa(hashString);
     }
 
-    async fetchArrayBuffer(url) {
+    // Resolve original URL into candidate absolute URLs (tries basePath variants)
+    resolveCandidates(url) {
+        // if already absolute, return as-is
         try {
-            const response = await fetch(url, { 
-                method: 'GET',
-                mode: 'cors',
-                credentials: 'same-origin'
-            });
-            if (!response.ok) throw new Error(`HTTP ${response.status}`);
-            return await response.arrayBuffer();
-        } catch (error) {
-            console.warn(`[Integrity] Could not fetch ${url}:`, error.message);
-            return null;
+            const u = new URL(url, this.origin);
+            if (u.origin !== this.origin || url.startsWith('http')) {
+                return [u.href];
+            }
+        } catch (e) {
+            /* ignore */
         }
+
+        const normalized = url.startsWith('/') ? url : '/' + url;
+        const candidates = [
+            this.origin + normalized,                        // root-based
+        ];
+
+        if (this.basePath && !normalized.startsWith(this.basePath)) {
+            candidates.unshift(this.origin + this.basePath + normalized); // repo-prefixed first
+        } else if (this.basePath && normalized.startsWith(this.basePath)) {
+            candidates.unshift(this.origin + normalized); // already includes basePath
+        }
+
+        // also try relative to current document
+        candidates.push(new URL(url, window.location.href).href);
+
+        // unique
+        return [...new Set(candidates)];
+    }
+
+    // replace fetchArrayBuffer usages with this helper
+    async fetchArrayBufferWithFallback(url) {
+        const candidates = this.resolveCandidates(url);
+        let lastErr = null;
+        for (const u of candidates) {
+            try {
+                const res = await fetch(u, { mode: 'cors' });
+                if (res.ok) return await res.arrayBuffer();
+                lastErr = new Error(`HTTP ${res.status} for ${u}`);
+            } catch (err) {
+                lastErr = err;
+            }
+        }
+        throw lastErr;
+    }
+
+    // Example: update verifyResources/performFileIntegrityCheck to call fetchArrayBufferWithFallback
+    async fetchArrayBuffer(url) {
+        // replace existing implementation with fallback wrapper
+        return await this.fetchArrayBufferWithFallback(url);
     }
 
     async verifyResources(manifest) {
@@ -203,7 +252,7 @@ class IntegrityMonitor {
         }
     }
 
-    // === DOM INJECTION MONITORING ===
+    // === ENHANCED DOM INJECTION MONITORING ===
 
     async captureInitialState() {
         const scripts = [];
@@ -239,13 +288,22 @@ class IntegrityMonitor {
     }
 
     captureOriginalTags() {
-        const allElements = document.querySelectorAll('*');
-        allElements.forEach(el => {
-            const tagInfo = this.getElementSignature(el);
-            this.originalTags.add(tagInfo);
+        // Only capture security-relevant elements
+        const relevantSelectors = [
+            'script', 'iframe', 'object', 'embed', 'form', 'input[type="hidden"]',
+            'link[rel="stylesheet"]', 'style', 'img[src*="javascript:"]', 
+            '[onclick]', '[onload]', '[onerror]', '[onmouseover]'
+        ];
+        
+        relevantSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(el => {
+                const signature = this.getElementSignature(el);
+                this.originalTags.add(signature);
+            });
         });
         
-        console.log(`[Integrity] Captured ${this.originalTags.size} original DOM elements`);
+        console.log(`[Integrity] Captured ${this.originalTags.size} security-relevant DOM elements`);
     }
 
     getElementSignature(element) {
@@ -256,15 +314,88 @@ class IntegrityMonitor {
         const type = element.type || '';
         
         if (tag === 'script') {
-            return `${tag}${id}${classes}[src="${src}"][type="${type}"]`;
+            // For scripts, include src and a hash of inline content
+            if (src) {
+                return `${tag}${id}${classes}[src="${src}"][type="${type}"]`;
+            } else {
+                const content = element.textContent || '';
+                const contentHash = this.simpleHash(content);
+                return `${tag}${id}${classes}[inline="${contentHash}"][type="${type}"]`;
+            }
         } else if (tag === 'link') {
             const rel = element.rel || '';
             return `${tag}${id}${classes}[href="${src}"][rel="${rel}"]`;
-        } else if (tag === 'iframe') {
+        } else if (tag === 'iframe' || tag === 'object' || tag === 'embed') {
             return `${tag}${id}${classes}[src="${src}"]`;
+        } else if (tag === 'form') {
+            const action = element.action || '';
+            const method = element.method || '';
+            return `${tag}${id}${classes}[action="${action}"][method="${method}"]`;
+        } else if (tag === 'input') {
+            const name = element.name || '';
+            const value = element.value || '';
+            return `${tag}${id}${classes}[type="${type}"][name="${name}"][value="${value.substring(0, 50)}"]`;
         } else {
-            return `${tag}${id}${classes}`;
+            // For elements with event handlers
+            const events = this.getEventHandlers(element);
+            return `${tag}${id}${classes}[events="${events}"]`;
         }
+    }
+
+    simpleHash(text) {
+        // Simple hash function for content comparison
+        let hash = 0;
+        for (let i = 0; i < text.length; i++) {
+            const char = text.charCodeAt(i);
+            hash = ((hash << 5) - hash) + char;
+            hash = hash & hash; // Convert to 32bit integer
+        }
+        return hash.toString(36);
+    }
+
+    getEventHandlers(element) {
+        const events = [];
+        const eventAttributes = ['onclick', 'onload', 'onerror', 'onmouseover', 'onsubmit', 'onchange', 'onfocus', 'onblur'];
+        
+        eventAttributes.forEach(attr => {
+            if (element.hasAttribute(attr)) {
+                events.push(attr);
+            }
+        });
+        
+        return events.join(',');
+    }
+
+    isSecurityRelevant(element) {
+        const tag = element.tagName.toLowerCase();
+        
+        // High-priority security elements
+        if (['script', 'iframe', 'object', 'embed', 'form'].includes(tag)) {
+            return true;
+        }
+        
+        // Elements with dangerous attributes
+        const dangerousAttrs = ['onclick', 'onload', 'onerror', 'onmouseover', 'onsubmit', 'onfocus', 'onblur'];
+        if (dangerousAttrs.some(attr => element.hasAttribute(attr))) {
+            return true;
+        }
+        
+        // External resource links
+        if (tag === 'link' && element.rel === 'stylesheet') {
+            return true;
+        }
+        
+        // Hidden inputs (often used for CSRF attacks)
+        if (tag === 'input' && element.type === 'hidden') {
+            return true;
+        }
+        
+        // Images with javascript: src
+        if (tag === 'img' && element.src && element.src.startsWith('javascript:')) {
+            return true;
+        }
+        
+        return false;
     }
 
     isNewInjection(element) {
@@ -277,12 +408,17 @@ class IntegrityMonitor {
         
         addedNodes.forEach(node => {
             if (node.nodeType === Node.ELEMENT_NODE) {
-                if (this.isNewInjection(node)) {
+                // Check the element itself
+                if (this.isSecurityRelevant(node) && this.isNewInjection(node)) {
                     injections.push(this.createInjectionReport(node));
                 }
                 
-                const descendants = node.querySelectorAll('*');
-                descendants.forEach(descendant => {
+                // Check descendants, but only security-relevant ones
+                const relevantDescendants = node.querySelectorAll(
+                    'script, iframe, object, embed, form, input[type="hidden"], link[rel="stylesheet"], style, [onclick], [onload], [onerror], [onmouseover]'
+                );
+                
+                relevantDescendants.forEach(descendant => {
                     if (this.isNewInjection(descendant)) {
                         injections.push(this.createInjectionReport(descendant));
                     }
