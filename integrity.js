@@ -338,8 +338,7 @@ class IntegrityMonitor {
         const relevantSelectors = [
             'script', 'iframe', 'object', 'embed', 'form', 'input[type="hidden"]',
             'link[rel="stylesheet"]', 'style', 'img[src*="javascript:"]', 
-            '[onclick]', '[onload]', '[onerror]', '[onmouseover]', 'META HTTP-EQUIV',
-            'String eid', 'SCRIPT','body','html'
+            '[onclick]', '[onload]', '[onerror]', '[onmouseover]'
         ];
         
         relevantSelectors.forEach(selector => {
@@ -621,4 +620,5 @@ integrityMonitor.init();
 
 // Export for testing
 window.IntegrityMonitor = integrityMonitor;
+
 
