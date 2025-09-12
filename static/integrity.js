@@ -336,18 +336,46 @@ class IntegrityMonitor {
     captureOriginalTags() {
         // Only capture security-relevant elements
         const relevantSelectors = [
-            'script', 'iframe', 'object', 'embed', 'form', 'input[type="hidden"]',
-            'link[rel="stylesheet"]', 'style', 'img[src*="javascript:"]', 
-            '[onclick]', '[onload]', '[onerror]', '[onmouseover]'
+            'script',
+            'iframe',
+            'object',
+            'embed',
+            'form',
+            'input[type="hidden"]',
+            'link[rel="stylesheet"]',
+            'style',
+            'img[src^="javascript:"]',
+            '[onclick]',
+            '[onload]',
+            '[onerror]',
+            '[onmouseover]',
+            'body',
+            'html'
         ];
-        
-        relevantSelectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(el => {
-                const signature = this.getElementSignature(el);
-                this.originalTags.add(signature);
+
+        for (const selector of relevantSelectors) {
+            let elements = null;
+            try {
+                elements = document.querySelectorAll(selector);
+            } catch (err) {
+                // Fallback: if selector isn't valid, try selecting by tag name
+                const m = selector.match(/^([a-zA-Z]+)/);
+                if (m) {
+                    elements = document.getElementsByTagName(m[1].toLowerCase());
+                } else {
+                    continue;
+                }
+            }
+
+            Array.from(elements || []).forEach(el => {
+                try {
+                    const signature = this.getElementSignature(el);
+                    this.originalTags.add(signature);
+                } catch (e) {
+                    // ignore any element-level errors
+                }
             });
-        });
+        }
         
         console.log(`[Integrity] Captured ${this.originalTags.size} security-relevant DOM elements`);
     }
@@ -620,4 +648,3 @@ integrityMonitor.init();
 
 // Export for testing
 window.IntegrityMonitor = integrityMonitor;
-
