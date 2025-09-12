@@ -17,6 +17,10 @@ class IntegrityMonitor {
         }
 
         this.origin = window.location.origin;
+
+        // --- auth/token state ---
+        this.authToken = null;
+        this.tokenExpires = 0;
     }
 
     getConfig() {
@@ -219,37 +223,78 @@ class IntegrityMonitor {
         return findings;
     }
 
+    // --- TOKEN ACQUISITION FOR PROTECTED ENDPOINTS ---
+    // derive token endpoint from reportEndpoint: /tenant/:t/report -> /tenant/:t/token
+    getTokenUrl() {
+        try {
+            return this.reportEndpoint.replace(/\/report\/?$/i, '/token');
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // fetch a short-lived token from backend, cache until near expiry
+    async fetchAuthToken() {
+        // reuse token while valid (refresh 10s before expiry)
+        if (this.authToken && Date.now() < (this.tokenExpires - 10000)) return this.authToken;
+
+        const tokenUrl = this.getTokenUrl();
+        if (!tokenUrl) return null;
+
+        try {
+            const resp = await fetch(tokenUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ tenant: this.config.tenant }),
+                cache: 'no-cache'
+            });
+            if (!resp.ok) {
+                console.warn(`[Integrity] token fetch failed ${resp.status} ${tokenUrl}`);
+                return null;
+            }
+            const j = await resp.json();
+            if (!j || !j.token) return null;
+            this.authToken = j.token;
+            if (j.expires_in) {
+                this.tokenExpires = Date.now() + (j.expires_in * 1000);
+            } else {
+                // try to parse JWT exp
+                try {
+                    const payload = JSON.parse(atob(this.authToken.split('.')[1]));
+                    this.tokenExpires = (payload.exp || 0) * 1000;
+                } catch (e) {
+                    // default short window
+                    this.tokenExpires = Date.now() + 120000;
+                }
+            }
+            return this.authToken;
+        } catch (err) {
+            console.warn('[Integrity] fetchAuthToken failed', err);
+            return null;
+        }
+    }
+
     async performFileIntegrityCheck() {
         try {
-            const response = await fetch(this.manifestEndpoint);
-            if (!response.ok) {
-                console.warn('[Integrity] Could not fetch manifest:', response.status);
+            // attempt to attach token when fetching manifest
+            const headers = {};
+            const token = await this.fetchAuthToken();
+            if (token) headers['Authorization'] = `Bearer ${token}`;
+
+            const resp = await fetch(this.manifestEndpoint, { method: 'GET', headers, cache: 'no-cache' });
+            if (!resp.ok) {
+                console.warn(`[Integrity] Could not fetch manifest ${this.manifestEndpoint}: HTTP ${resp.status}`);
                 return;
             }
+            const manifest = await resp.json();
 
-            const manifest = await response.json();
+            // continue with verification using manifest (existing code)
             const findings = await this.verifyResources(manifest);
-            const initialState = await this.captureInitialState();
-
-            if (findings.length > 0) {
-                console.warn('[Integrity] File integrity issues found:', findings);
-                
-                const report = {
-                    tenant: this.config.tenant,
-                    page: window.location.href,
-                    time: new Date().toISOString(),
-                    type: 'file_integrity',
-                    findings: findings,
-                    injected: [],
-                    initialState: initialState
-                };
-
-                await this.sendReport(report);
-            } else {
-                console.log('[Integrity] All files verified successfully');
+            if (findings && findings.length) {
+                await this.sendReport({ type: 'file_integrity', findings });
             }
         } catch (error) {
-            console.error('[Integrity] File integrity check failed:', error);
+            console.error('[Integrity] performFileIntegrityCheck error', error);
         }
     }
 
@@ -371,7 +416,7 @@ class IntegrityMonitor {
         const tag = element.tagName.toLowerCase();
         
         // High-priority security elements
-        if (['script', 'iframe', 'object', 'embed', 'form'].includes(tag)) {
+        if (['script', 'iframe', 'object', 'embed', 'form', 'img', 'src', 'style'].includes(tag)) {
             return true;
         }
         
@@ -529,21 +574,23 @@ class IntegrityMonitor {
             visibilityState: document.visibilityState
         };
 
+        const headers = {
+            'Content-Type': 'application/json'
+        };
+
+        // try to get token and attach Authorization header
+        const token = await this.fetchAuthToken();
+        if (token) headers['Authorization'] = `Bearer ${token}`;
+
         try {
-            const response = await fetch(this.reportEndpoint, {
+            await fetch(this.reportEndpoint, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(report)
+                headers,
+                body: JSON.stringify(report),
+                keepalive: true
             });
-            
-            if (response.ok) {
-                const result = await response.json();
-                console.log(`[Integrity] Report sent successfully (${report.type}):`, result);
-            } else {
-                console.error(`[Integrity] Failed to send report (${report.type}):`, response.status);
-            }
         } catch (error) {
-            console.error(`[Integrity] Error sending report (${report.type}):`, error);
+            console.error('[Integrity] sendReport failed', error);
         }
     }
 
@@ -573,3 +620,4 @@ integrityMonitor.init();
 
 // Export for testing
 window.IntegrityMonitor = integrityMonitor;
+
