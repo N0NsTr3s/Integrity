@@ -276,11 +276,17 @@ class IntegrityMonitor {
 
     async performFileIntegrityCheck() {
         try {
-            // attempt to attach token when fetching manifest
-            const headers = {};
+            // First get a token
             const token = await this.fetchAuthToken();
-            if (token) headers['Authorization'] = `Bearer ${token}`;
+            if (!token) {
+                console.warn('[Integrity] No authentication token available, skipping integrity check');
+                return;
+            }
 
+            // Then use token for manifest fetch
+            const headers = {
+                'Authorization': `Bearer ${token}`
+            };
             const resp = await fetch(this.manifestEndpoint, { method: 'GET', headers, cache: 'no-cache' });
             if (!resp.ok) {
                 console.warn(`[Integrity] Could not fetch manifest ${this.manifestEndpoint}: HTTP ${resp.status}`);
@@ -602,13 +608,16 @@ class IntegrityMonitor {
             visibilityState: document.visibilityState
         };
 
-        const headers = {
-            'Content-Type': 'application/json'
-        };
-
-        // try to get token and attach Authorization header
         const token = await this.fetchAuthToken();
-        if (token) headers['Authorization'] = `Bearer ${token}`;
+        if (!token) {
+            console.warn('[Integrity] No authentication token available, skipping report');
+            return;
+        }
+
+        const headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`
+        };
 
         try {
             await fetch(this.reportEndpoint, {
