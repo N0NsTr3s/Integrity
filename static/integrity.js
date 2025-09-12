@@ -173,18 +173,19 @@ class IntegrityMonitor {
             const expectedSha = meta.sha256;
             if (!expectedSha) continue;
 
-            let resourceUrl;
-            if (path.startsWith('/')) {
-                resourceUrl = window.location.origin + path;
-            } else {
-                resourceUrl = new URL(path, window.location.href).href;
-            }
-
             try {
-                const data = await this.fetchArrayBuffer(resourceUrl);
-                if (data === null) {
+                // If manifest entry is already an absolute URL, fetch that exact URL.
+                // Otherwise use the fallback fetch which will try repo basePath (/Integrity) and other candidates.
+                let arrayBuffer;
+                if (/^https?:\/\//i.test(path)) {
+                    arrayBuffer = await this.fetchArrayBuffer(path);
+                } else {
+                    arrayBuffer = await this.fetchArrayBufferWithFallback(path);
+                }
+
+                if (!arrayBuffer) {
                     findings.push({
-                        url: resourceUrl,
+                        url: path,
                         path: path,
                         issue: 'unable_to_fetch',
                         expected: expectedSha,
@@ -193,10 +194,10 @@ class IntegrityMonitor {
                     continue;
                 }
 
-                const actualSha = await this.sha256Base64(new Uint8Array(data));
+                const actualSha = await this.sha256Base64(new Uint8Array(arrayBuffer));
                 if (actualSha !== expectedSha) {
                     findings.push({
-                        url: resourceUrl,
+                        url: path,
                         path: path,
                         issue: 'hash_mismatch',
                         expected: expectedSha,
@@ -205,7 +206,7 @@ class IntegrityMonitor {
                 }
             } catch (error) {
                 findings.push({
-                    url: resourceUrl,
+                    url: path,
                     path: path,
                     issue: 'verification_error',
                     expected: expectedSha,
