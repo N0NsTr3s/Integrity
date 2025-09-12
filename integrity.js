@@ -356,7 +356,8 @@ class IntegrityMonitor {
             '[onerror]',
             '[onmouseover]',
             'body',
-            'html'
+            'html',
+            'button'
         ];
 
         for (const selector of relevantSelectors) {
@@ -450,7 +451,7 @@ class IntegrityMonitor {
         const tag = element.tagName.toLowerCase();
         
         // High-priority security elements
-        if (['script', 'iframe', 'object', 'embed', 'form', 'img', 'src', 'style'].includes(tag)) {
+        if (['script', 'iframe', 'object', 'embed', 'form', 'img', 'src', 'style', 'button'].includes(tag)) {
             return true;
         }
         
@@ -657,3 +658,4 @@ integrityMonitor.init();
 
 // Export for testing
 window.IntegrityMonitor = integrityMonitor;
+
