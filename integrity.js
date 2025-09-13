@@ -193,7 +193,8 @@ class IntegrityMonitor {
                         path: path,
                         issue: 'unable_to_fetch',
                         expected: expectedSha,
-                        actual: null
+                        actual: null,
+                        risk_level: 'high' // Added risk level
                     });
                     continue;
                 }
@@ -205,7 +206,8 @@ class IntegrityMonitor {
                         path: path,
                         issue: 'hash_mismatch',
                         expected: expectedSha,
-                        actual: actualSha
+                        actual: actualSha,
+                        risk_level: 'critical' // Mark hash_mismatch as critical
                     });
                 }
             } catch (error) {
@@ -215,7 +217,8 @@ class IntegrityMonitor {
                     issue: 'verification_error',
                     expected: expectedSha,
                     actual: null,
-                    error: error.message
+                    error: error.message,
+                    risk_level: 'high' // Added risk level
                 });
             }
         }
@@ -297,7 +300,34 @@ class IntegrityMonitor {
             // continue with verification using manifest (existing code)
             const findings = await this.verifyResources(manifest);
             if (findings && findings.length) {
-                await this.sendReport({ type: 'file_integrity', findings });
+                // Determine overall risk level based on findings
+                let risk_level = 'low';
+                let critical_count = 0;
+                let high_risk_count = 0;
+                
+                findings.forEach(finding => {
+                    if (finding.risk_level === 'critical' || finding.issue === 'hash_mismatch') {
+                        critical_count++;
+                    } else if (finding.risk_level === 'high') {
+                        high_risk_count++;
+                    }
+                });
+                
+                if (critical_count > 0) {
+                    risk_level = 'critical';
+                } else if (high_risk_count > 0 || findings.length > 5) {
+                    risk_level = 'high';
+                } else if (findings.length > 0) {
+                    risk_level = 'medium';
+                }
+                
+                await this.sendReport({ 
+                    type: 'file_integrity', 
+                    findings: findings,
+                    risk_level: risk_level,
+                    critical_count: critical_count,
+                    high_risk_count: high_risk_count
+                });
             }
         } catch (error) {
             console.error('[Integrity] performFileIntegrityCheck error', error);
@@ -658,4 +688,3 @@ integrityMonitor.init();
 
 // Export for testing
 window.IntegrityMonitor = integrityMonitor;
-
